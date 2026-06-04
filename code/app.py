@@ -369,7 +369,16 @@ diet_b = st.sidebar.selectbox("Breakfast Diet", ["Standard", "Vegetarian", "Vega
 diet_l = st.sidebar.selectbox("Lunch Diet", ["Standard", "Vegetarian", "Vegan", "Pescatarian", "Halal", "Kosher"])
 diet_d = st.sidebar.selectbox("Dinner Diet", ["Standard", "Vegetarian", "Vegan", "Pescatarian", "Halal", "Kosher"])
 
-# Execution Pipeline
+# ==========================================
+# Execution Pipeline & Session State
+# ==========================================
+
+# 1. Initialize the session state memory
+if 'current_plan' not in st.session_state:
+    st.session_state.current_plan = None
+    st.session_state.div_score = 0
+
+# 2. The Generation Trigger
 if st.sidebar.button("Generate 7-Day Plan", type="primary"):
     with st.spinner("Generating personalized 7-day meal plan..."):
         
@@ -383,47 +392,53 @@ if st.sidebar.button("Generate 7-Day Plan", type="primary"):
         
         if len(pool_b) < 7 or len(pool_l) < 7 or len(pool_d) < 7:
             st.error(f"⚠️ Over-constrained! Database lacks enough safe recipes. (Available -> Breakfasts: {len(pool_b)}, Lunches: {len(pool_l)}, Dinners: {len(pool_d)})")
+            st.session_state.current_plan = None # Clear memory on failure
         else:
-            plan = generate_plan(pool_b, pool_l, pool_d, RDA)
-            
-            unique_meals = len(set([m['meal_name'] for m in plan]))
-            div_score = (unique_meals / 21.0) * 100
-            st.success(f"Generated successfully! **Diversity Score: {div_score:.0f}%**")
-            
-            for day_idx in range(7):
-                st.markdown(f"### Day {day_idx + 1}")
-                day_meals = plan[day_idx*3 : (day_idx*3)+3]
-                
-                d_totals = {k: sum(m[k] for m in day_meals) for k in RDA.keys()}
-                flags = []
-                if d_totals['fib'] < RDA['fib'] * 0.8: flags.append("Low Fiber")
-                if d_totals['iron'] < RDA['iron'] * 0.8: flags.append("Low Iron")
-                if d_totals['b12'] < RDA['b12'] * 0.8: flags.append("Low B12")
-                if d_totals['calc'] < RDA['calc'] * 0.8: flags.append("Low Calcium")
-                
-                if flags:
-                    st.warning(f"📊 **Daily Audit Flags:** {', '.join(flags)} (Day falls below 80% of NCBI targets)")
-                else:
-                    st.info("📊 **Daily Audit:** All 10 macro/micro nutrients successfully meet baseline RDA targets.")
+            # SAVE to session state instead of just a local variable
+            st.session_state.current_plan = generate_plan(pool_b, pool_l, pool_d, RDA)
+            unique_meals = len(set([m['meal_name'] for m in st.session_state.current_plan]))
+            st.session_state.div_score = (unique_meals / 21.0) * 100
 
-                cols = st.columns(3)
-                for meal_idx, m in enumerate(day_meals):
-                    with cols[meal_idx]:
-                        m_type = ["Breakfast", "Lunch", "Dinner"][meal_idx]
-                        st.markdown(f"**{m_type}**: {m['meal_name']}")
-                        st.caption(f"**{m['cal']} kcal | {m['prot']}g Prot** | {m['carb']}g Carb | {m['fat']}g Fat")
-                        
-                        with st.expander("Details, Micros & Scaled Ingredients"):
-                            st.write(f"**Fib:** {m['fib']}g | **Fe:** {m['iron']}mg | **Ca:** {m['calc']}mg")
-                            st.write(f"**B12:** {m['b12']}mcg | **VitD:** {m['vitd']}IU | **Zn:** {m['zinc']}mg")
-                            st.markdown("**Ingredients:**")
-                            for ing in m['ingredients']: st.write(f"• {ing}")
-                            
-                        c1, c2 = st.columns(2)
-                        if c1.button("👍", key=f"u_{day_idx}_{meal_idx}", help="Like this meal"):
-                            update_rl_weight(profile_name, m['blueprint_id'], 'up')
-                            st.toast("Feedback Saved! We'll show you more meals like this.")
-                        if c2.button("👎", key=f"d_{day_idx}_{meal_idx}", help="Dislike this meal"):
-                            update_rl_weight(profile_name, m['blueprint_id'], 'down')
-                            st.toast("Feedback Saved! We'll show you fewer meals like this.")
-                st.divider()
+# 3. The Rendering Loop (Reads from memory, not the generate button)
+if st.session_state.current_plan is not None:
+    plan = st.session_state.current_plan
+    
+    st.success(f"Generated successfully! **Diversity Score: {st.session_state.div_score:.0f}%**")
+    
+    for day_idx in range(7):
+        st.markdown(f"### Day {day_idx + 1}")
+        day_meals = plan[day_idx*3 : (day_idx*3)+3]
+        
+        d_totals = {k: sum(m[k] for m in day_meals) for k in RDA.keys()}
+        flags = []
+        if d_totals['fib'] < RDA['fib'] * 0.8: flags.append("Low Fiber")
+        if d_totals['iron'] < RDA['iron'] * 0.8: flags.append("Low Iron")
+        if d_totals['b12'] < RDA['b12'] * 0.8: flags.append("Low B12")
+        if d_totals['calc'] < RDA['calc'] * 0.8: flags.append("Low Calcium")
+        
+        if flags:
+            st.warning(f"📊 **Daily Audit Flags:** {', '.join(flags)} (Day falls below 80% of NCBI targets)")
+        else:
+            st.info("📊 **Daily Audit:** All 10 macro/micro nutrients successfully meet baseline RDA targets.")
+
+        cols = st.columns(3)
+        for meal_idx, m in enumerate(day_meals):
+            with cols[meal_idx]:
+                m_type = ["Breakfast", "Lunch", "Dinner"][meal_idx]
+                st.markdown(f"**{m_type}**: {m['meal_name']}")
+                st.caption(f"**{m['cal']} kcal | {m['prot']}g Prot** | {m['carb']}g Carb | {m['fat']}g Fat")
+                
+                with st.expander("Details, Micros & Scaled Ingredients"):
+                    st.write(f"**Fib:** {m['fib']}g | **Fe:** {m['iron']}mg | **Ca:** {m['calc']}mg")
+                    st.write(f"**B12:** {m['b12']}mcg | **VitD:** {m['vitd']}IU | **Zn:** {m['zinc']}mg")
+                    st.markdown("**Ingredients:**")
+                    for ing in m['ingredients']: st.write(f"• {ing}")
+                    
+                c1, c2 = st.columns(2)
+                if c1.button("👍", key=f"u_{day_idx}_{meal_idx}", help="Like this meal"):
+                    update_rl_weight(profile_name, m['blueprint_id'], 'up')
+                    st.toast("Feedback Saved! We'll show you more meals like this.")
+                if c2.button("👎", key=f"d_{day_idx}_{meal_idx}", help="Dislike this meal"):
+                    update_rl_weight(profile_name, m['blueprint_id'], 'down')
+                    st.toast("Feedback Saved! We'll show you fewer meals like this.")
+        st.divider()
