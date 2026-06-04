@@ -172,11 +172,17 @@ def fetch_raw_components(blueprint_id):
 def get_diverse_sample(pool, n, max_category_count=2, max_ing_overlap=0.4):
     selected = []
     
-    # FIX: Force numeric values, fill any database Nulls, and enforce a strict floor > 0
+    # 1. Clean the weights
     pool['rl_weight'] = pd.to_numeric(pool['rl_weight'], errors='coerce').fillna(1.0).clip(lower=0.001)
     
-    # Safe to sample
-    shuffled = pool.sample(frac=1, weights='rl_weight').to_dict('records')
+    # 2. The Pandas/NumPy Circuit Breaker
+    try:
+        # Attempt the mathematically rigorous weighted shuffle
+        shuffled = pool.sample(frac=1, weights='rl_weight').to_dict('records')
+    except ValueError:
+        # If the probability matrix exhausts itself, safely fallback to a standard shuffle
+        shuffled = pool.sample(frac=1).to_dict('records')
+        
     categories = ['salad', 'soup', 'bowl', 'pasta', 'sandwich', 'wrap', 'curry', 'taco', 'stir-fry', 'skillet']
     
     for meal in shuffled:
