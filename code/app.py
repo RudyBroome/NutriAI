@@ -52,7 +52,8 @@ def build_exclusion_subquery(conditions, allergies, diet):
     if "IBS (Low FODMAP)" in conditions: banned_rules.append("f2.is_high_fodmap = 1")
     if "GERD" in conditions: banned_rules.append("f2.is_gerd_trigger = 1")
     if "Diabetes (Low GI)" in conditions: banned_rules.append("f2.is_high_gi = 1")
-
+    if "Hypertension (DASH)" in conditions:
+        for s in ['salt', 'soy sauce', 'cured', 'bacon', 'sausage', 'pickled', 'brine', 'broth']: banned_rules.append(ban(s))
     # Advanced Dairy Rules
     safe_dairy_rules = [
         f"({ban('milk')} AND f2.description NOT LIKE '%almond%' AND bc2.ingredient_name NOT LIKE '%almond%' AND f2.description NOT LIKE '%soy%' AND bc2.ingredient_name NOT LIKE '%soy%' AND f2.description NOT LIKE '%oat%' AND bc2.ingredient_name NOT LIKE '%oat%' AND f2.description NOT LIKE '%coconut%' AND bc2.ingredient_name NOT LIKE '%coconut%' AND f2.description NOT LIKE '%hemp%' AND bc2.ingredient_name NOT LIKE '%hemp%')",
@@ -170,6 +171,11 @@ def fetch_raw_components(blueprint_id):
 # ==========================================
 def get_diverse_sample(pool, n, max_category_count=2, max_ing_overlap=0.4):
     selected = []
+    
+    # FIX: Force numeric values, fill any database Nulls, and enforce a strict floor > 0
+    pool['rl_weight'] = pd.to_numeric(pool['rl_weight'], errors='coerce').fillna(1.0).clip(lower=0.001)
+    
+    # Safe to sample
     shuffled = pool.sample(frac=1, weights='rl_weight').to_dict('records')
     categories = ['salad', 'soup', 'bowl', 'pasta', 'sandwich', 'wrap', 'curry', 'taco', 'stir-fry', 'skillet']
     
