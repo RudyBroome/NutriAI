@@ -345,6 +345,73 @@ def generate_plan(b_pool, l_pool, d_pool, rda):
 # ==========================================
 # 4. STREAMLIT USER INTERFACE
 # ==========================================
+def generate_explain_log(conditions, allergies, diet_b, diet_l, diet_d):
+    """Translates SQL firewall rules into human-readable explanations."""
+    log = []
+    
+    # 1. Conditions
+    if "IBS (Low FODMAP)" in conditions:
+        log.append("🛡️ **IBS (Low FODMAP):** Blocked all ingredients flagged as high-FODMAP (e.g., garlic, onion, excess wheat) via Monash University guidelines.")
+    if "GERD" in conditions:
+        log.append("🛡️ **GERD:** Blocked known acid-reflux triggers (citrus, tomatoes, spicy/fried foods) via clinical CSV overlay.")
+    if "Diabetes (Low GI)" in conditions:
+        log.append("🛡️ **Diabetes (Low GI):** Hard-filtered database for low glycemic index foods (GI ≤ 55).")
+    if "Hypertension (DASH)" in conditions:
+        log.append("🛡️ **Hypertension (DASH):** Blocked high-sodium components: salt, soy sauce, cured meats, bacon, sausage, pickles, and broths.")
+        
+    # 2. Allergies
+    if "Dairy" in allergies:
+        log.append("🚫 **Dairy Allergy:** Filtered milk, cheese, butter, and yogurt (safely allowing plant-based alternatives like almond/oat milk).")
+    if "Tree Nuts" in allergies:
+        log.append("🚫 **Tree Nut Allergy:** Blocked almonds, walnuts, pecans, cashews, pistachios, and macadamias.")
+    if "Peanuts" in allergies:
+        log.append("🚫 **Peanut Allergy:** Blocked all peanut products and cross-contamination risks.")
+    if "Shellfish" in allergies:
+        log.append("🚫 **Shellfish Allergy:** Blocked shrimp, crab, lobster, and clams.")
+    if "Gluten" in allergies:
+        log.append("🚫 **Gluten-Free (Celiac):** Blocked wheat, flour, bread, and pasta. (Buckwheat safely retained). Strict cross-contamination rules applied.")
+    if "Soy" in allergies:
+        log.append("🚫 **Soy Allergy:** Blocked soy, tofu, and edamame.")
+    if "Eggs" in allergies:
+        log.append("🚫 **Egg Allergy:** Blocked eggs (while safely retaining unrelated items like eggplant).")
+    if "Pork" in allergies:
+        log.append("🚫 **Pork Aversion:** Blocked pork, bacon, ham, sausage, and prosciutto.")
+        
+    # 3. Mixed Diets (Mapped to Specific Meals)
+    diet_mapping = {
+        "Breakfast": diet_b,
+        "Lunch": diet_l,
+        "Dinner": diet_d
+    }
+    
+    # Group the meals by their active diet to prevent redundant lines
+    active_diets = {}
+    for meal, diet in diet_mapping.items():
+        if diet != "Standard":
+            if diet not in active_diets:
+                active_diets[diet] = []
+            active_diets[diet].append(meal)
+            
+    for diet, meals in active_diets.items():
+        # Format the meal string cleanly (e.g., "Breakfast" or "Breakfast and Lunch")
+        meal_str = " and ".join(meals) if len(meals) == 2 else ", ".join(meals)
+        
+        if diet == "Vegetarian":
+            log.append(f"🌿 **Vegetarian Mode ({meal_str}):** All meats and seafood strictly blocked.")
+        elif diet == "Vegan":
+            log.append(f"🌱 **Vegan Mode ({meal_str}):** All meats, seafood, dairy, eggs, and honey blocked.")
+        elif diet == "Pescatarian":
+            log.append(f"🐟 **Pescatarian Mode ({meal_str}):** All land meats blocked; fish and seafood permitted.")
+        elif diet == "Halal":
+            log.append(f"🌙 **Halal Mode ({meal_str}):** Blocked pork products and alcohol/wine derivatives.")
+        elif diet == "Kosher":
+            log.append(f"✡️ **Kosher Mode ({meal_str}):** Blocked pork products and all shellfish.")
+            
+    if not log:
+        log.append("✅ **Standard Diet:** No major clinical exclusions or allergy blocks applied.")
+        
+    return log
+
 st.set_page_config(page_title="NutriAI", layout="wide")
 st.title("🥗 NutriAI")
 st.markdown("Automated Diet Plan Builder for personalized clinical nutrition.")
@@ -406,10 +473,18 @@ if st.sidebar.button("Generate 7-Day Plan", type="primary"):
             st.error(f"⚠️ Over-constrained! Database lacks enough safe recipes. (Available -> Breakfasts: {len(pool_b)}, Lunches: {len(pool_l)}, Dinners: {len(pool_d)})")
             st.session_state.current_plan = None # Clear memory on failure
         else:
-            # SAVE to session state instead of just a local variable
+            # SAVE the plan to memory
             st.session_state.current_plan = generate_plan(pool_b, pool_l, pool_d, RDA)
             unique_meals = len(set([m['meal_name'] for m in st.session_state.current_plan]))
             st.session_state.div_score = (unique_meals / 21.0) * 100
+            
+            # SNAPSHOT the exact constraints used for this specific plan
+            # .copy() ensures it locks in the exact list, immune to future sidebar clicks
+            st.session_state.frozen_conds = conds.copy() 
+            st.session_state.frozen_algs = algs.copy()
+            st.session_state.frozen_diet_b = diet_b
+            st.session_state.frozen_diet_l = diet_l
+            st.session_state.frozen_diet_d = diet_d
 
 # 3. The Rendering Loop (Reads from memory, not the generate button)
 if st.session_state.current_plan is not None:
@@ -417,40 +492,64 @@ if st.session_state.current_plan is not None:
     
     st.success(f"Generated successfully! **Diversity Score: {st.session_state.div_score:.0f}%**")
     
-    for day_idx in range(7):
-        st.markdown(f"### Day {day_idx + 1}")
-        day_meals = plan[day_idx*3 : (day_idx*3)+3]
-        
-        d_totals = {k: sum(m[k] for m in day_meals) for k in RDA.keys()}
-        flags = []
-        if d_totals['fib'] < RDA['fib'] * 0.8: flags.append("Low Fiber")
-        if d_totals['iron'] < RDA['iron'] * 0.8: flags.append("Low Iron")
-        if d_totals['b12'] < RDA['b12'] * 0.8: flags.append("Low B12")
-        if d_totals['calc'] < RDA['calc'] * 0.8: flags.append("Low Calcium")
-        
-        if flags:
-            st.warning(f"📊 **Daily Audit Flags:** {', '.join(flags)} (Day falls below 80% of NCBI targets)")
-        else:
-            st.info("📊 **Daily Audit:** All 10 macro/micro nutrients successfully meet baseline RDA targets.")
+    # Create the Tabs
+    tab_plan, tab_explain = st.tabs(["🍽️ 7-Day Meal Plan", "🔍 Clinical Firewall Audit (Explain)"])
+    
+    # --- TAB 1: THE MEAL PLAN ---
+    with tab_plan:
+        for day_idx in range(7):
+            st.markdown(f"### Day {day_idx + 1}")
+            day_meals = plan[day_idx*3 : (day_idx*3)+3]
+            
+            d_totals = {k: sum(m[k] for m in day_meals) for k in RDA.keys()}
+            flags = []
+            if d_totals['fib'] < RDA['fib'] * 0.8: flags.append("Low Fiber")
+            if d_totals['iron'] < RDA['iron'] * 0.8: flags.append("Low Iron")
+            if d_totals['b12'] < RDA['b12'] * 0.8: flags.append("Low B12")
+            if d_totals['calc'] < RDA['calc'] * 0.8: flags.append("Low Calcium")
+            
+            if flags:
+                st.warning(f"📊 **Daily Audit Flags:** {', '.join(flags)} (Day falls below 80% of NCBI targets)")
+            else:
+                st.info("📊 **Daily Audit:** All 10 macro/micro nutrients successfully meet baseline RDA targets.")
 
-        cols = st.columns(3)
-        for meal_idx, m in enumerate(day_meals):
-            with cols[meal_idx]:
-                m_type = ["Breakfast", "Lunch", "Dinner"][meal_idx]
-                st.markdown(f"**{m_type}**: {m['meal_name']}")
-                st.caption(f"**{m['cal']} kcal | {m['prot']}g Prot** | {m['carb']}g Carb | {m['fat']}g Fat")
-                
-                with st.expander("Details, Micros & Scaled Ingredients"):
-                    st.write(f"**Fib:** {m['fib']}g | **Fe:** {m['iron']}mg | **Ca:** {m['calc']}mg")
-                    st.write(f"**B12:** {m['b12']}mcg | **VitD:** {m['vitd']}IU | **Zn:** {m['zinc']}mg")
-                    st.markdown("**Ingredients:**")
-                    for ing in m['ingredients']: st.write(f"• {ing}")
+            cols = st.columns(3)
+            for meal_idx, m in enumerate(day_meals):
+                with cols[meal_idx]:
+                    m_type = ["Breakfast", "Lunch", "Dinner"][meal_idx]
+                    st.markdown(f"**{m_type}**: {m['meal_name']}")
+                    st.caption(f"**{m['cal']} kcal | {m['prot']}g Prot** | {m['carb']}g Carb | {m['fat']}g Fat")
                     
-                c1, c2 = st.columns(2)
-                if c1.button("👍", key=f"u_{day_idx}_{meal_idx}", help="Like this meal"):
-                    update_rl_weight(profile_name, m['blueprint_id'], 'up')
-                    st.toast("Feedback Saved! We'll show you more meals like this.")
-                if c2.button("👎", key=f"d_{day_idx}_{meal_idx}", help="Dislike this meal"):
-                    update_rl_weight(profile_name, m['blueprint_id'], 'down')
-                    st.toast("Feedback Saved! We'll show you fewer meals like this.")
-        st.divider()
+                    with st.expander("Details, Micros & Scaled Ingredients"):
+                        st.write(f"**Fib:** {m['fib']}g | **Fe:** {m['iron']}mg | **Ca:** {m['calc']}mg")
+                        st.write(f"**B12:** {m['b12']}mcg | **VitD:** {m['vitd']}IU | **Zn:** {m['zinc']}mg")
+                        st.markdown("**Ingredients:**")
+                        for ing in m['ingredients']: st.write(f"• {ing}")
+                        
+                    c1, c2 = st.columns(2)
+                    if c1.button("👍", key=f"u_{day_idx}_{meal_idx}", help="Like this meal"):
+                        update_rl_weight(profile_name, m['blueprint_id'], 'up')
+                        st.toast("Feedback Saved! We'll show you more meals like this.")
+                    if c2.button("👎", key=f"d_{day_idx}_{meal_idx}", help="Dislike this meal"):
+                        update_rl_weight(profile_name, m['blueprint_id'], 'down')
+                        st.toast("Feedback Saved! We'll show you fewer meals like this.")
+            st.divider()
+
+    # --- TAB 2: THE EXPLAIN FEATURE ---
+    with tab_explain:
+        st.subheader("Why were certain foods excluded?")
+        st.markdown("Because clinical safety is paramount, NutriAI uses a strict SQL-layer firewall. "
+                    "Unsafe recipes are completely blocked at the database level and are never considered by the generation engine. "
+                    "Below are the active exclusion rules for this plan:")
+        
+        # Read from the frozen snapshot in memory, NOT the live sidebar
+        explanations = generate_explain_log(
+            st.session_state.frozen_conds, 
+            st.session_state.frozen_algs, 
+            st.session_state.frozen_diet_b, 
+            st.session_state.frozen_diet_l, 
+            st.session_state.frozen_diet_d
+        )
+        
+        for msg in explanations:
+            st.info(msg)
